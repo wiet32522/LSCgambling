@@ -1,0 +1,981 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Wiet de Casino - Roll</title>
+    <link href="https://fonts.googleapis.com/css2?family=Rajdhani:wght@400;600;700&family=Orbitron:wght@400;700&display=swap" rel="stylesheet">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.0.0/socket.io.js"></script>
+    <style>
+        :root {
+            --primary-bg: #1a1e28;
+            --secondary-bg: #222730;
+            --tertiary-bg: #2b303b; /* For inner sections */
+            --accent-green: #00ff7f; /* Neon Green */
+            --accent-blue: #00bfff; /* Deep Sky Blue */
+            --text-color: #e0e0e0;
+            --input-bg: #1f232b;
+            --button-primary: linear-gradient(90deg, #00bfff, #00ff7f);
+            --button-hover: linear-gradient(90deg, #00ff7f, #00bfff);
+            --border-glow: rgba(0, 255, 127, 0.5); /* Green glow effect */
+            --history-win: #00ff7f;
+            --history-lose: #e74c3c;
+            --chat-text: #a0a0a0;
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Rajdhani', sans-serif;
+            background: var(--primary-bg);
+            color: var(--text-color);
+            min-height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            overflow: hidden;
+            position: relative;
+            animation: backgroundShift 15s infinite alternate;
+        }
+
+        @keyframes backgroundShift {
+            0% { background-color: #1a1e28; }
+            50% { background-color: #12161e; }
+            100% { background-color: #1a1e28; }
+        }
+
+        .container {
+            width: 98%;
+            max-width: 1400px;
+            padding: 20px;
+            background: var(--secondary-bg);
+            border-radius: 15px;
+            box-shadow: 0 0 50px rgba(0, 0, 0, 0.7);
+            position: relative;
+            border: 1px solid rgba(0, 255, 127, 0.1);
+            animation: pulseBorder 5s infinite ease-in-out;
+            display: grid;
+            grid-template-columns: 1fr 250px; /* Adjusted grid for no left panel */
+            gap: 20px;
+            min-height: 90vh;
+            align-items: start;
+        }
+
+        @keyframes pulseBorder {
+            0% { border-color: rgba(0, 255, 127, 0.1); box-shadow: 0 0 30px rgba(0, 255, 127, 0.05); }
+            50% { border-color: rgba(0, 255, 127, 0.4); box-shadow: 0 0 60px rgba(0, 255, 127, 0.2); }
+            100% { border-color: rgba(0, 255, 127, 0.1); box-shadow: 0 0 30px rgba(0, 255, 127, 0.05); }
+        }
+
+        .header {
+            grid-column: 1 / -1;
+            font-family: 'Orbitron', sans-serif;
+            text-align: center;
+            margin-bottom: 20px;
+            font-size: 3em;
+            font-weight: 700;
+            color: var(--accent-green);
+            text-shadow: 0 0 15px var(--accent-green), 0 0 30px var(--accent-green);
+            letter-spacing: 2px;
+            animation: neonGlow 1.5s ease-in-out infinite alternate;
+        }
+
+        @keyframes neonGlow {
+            from { text-shadow: 0 0 8px var(--accent-green), 0 0 16px var(--accent-green), 0 0 24px var(--accent-green); }
+            to { text-shadow: 0 0 4px var(--accent-green), 0 0 8px var(--accent-green), 0 0 12px var(--accent-green); }
+        }
+
+        .currency-display {
+            position: absolute;
+            top: 25px;
+            right: 300px; /* Adjusted position due to chat */
+            background: rgba(0, 0, 0, 0.7);
+            padding: 8px 15px;
+            border-radius: 8px;
+            border: 1px solid var(--accent-blue);
+            font-size: 1.0em;
+            font-weight: 600;
+            box-shadow: 0 0 10px var(--accent-blue);
+            display: flex;
+            align-items: center;
+            gap: 5px;
+            z-index: 10;
+        }
+
+        .currency-display::before {
+            content: '♦'; /* Diamond icon for LSC */
+            color: var(--accent-green);
+            font-size: 1.1em;
+        }
+
+        .main-game-area {
+            grid-column: 1 / 2; /* Main game area takes first column */
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+        }
+
+        .previous-rolls {
+            background: var(--tertiary-bg);
+            border-radius: 10px;
+            padding: 10px;
+            box-shadow: 0 0 15px rgba(0, 0, 0, 0.5);
+            border: 1px solid rgba(0, 191, 255, 0.1);
+        }
+
+        .previous-rolls h3 {
+            color: var(--accent-green);
+            font-size: 1.1em;
+            margin-bottom: 10px;
+            text-shadow: 0 0 5px rgba(0, 255, 127, 0.3);
+            border-bottom: 1px solid rgba(0, 255, 127, 0.1);
+            padding-bottom: 8px;
+        }
+
+        .roll-history {
+            display: flex;
+            gap: 5px;
+            overflow-x: auto;
+            padding-bottom: 5px;
+            -webkit-overflow-scrolling: touch;
+            scrollbar-width: none;
+            -ms-overflow-style: none;
+        }
+        .roll-history::-webkit-scrollbar {
+            display: none;
+        }
+
+        .roll-item {
+            flex-shrink: 0;
+            padding: 5px 10px;
+            border-radius: 5px;
+            font-size: 0.9em;
+            font-weight: 600;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            text-align: center;
+            min-width: 60px;
+        }
+        .roll-item.win {
+            background-color: rgba(0, 255, 127, 0.2);
+            color: var(--history-win);
+            border-color: var(--history-win);
+            text-shadow: 0 0 5px rgba(0, 255, 127, 0.5);
+        }
+        .roll-item.lose {
+            background-color: rgba(231, 76, 60, 0.2);
+            color: var(--history-lose);
+            border-color: var(--history-lose);
+            text-shadow: 0 0 5px rgba(231, 76, 60, 0.5);
+        }
+
+        .roll-display {
+            background: var(--tertiary-bg);
+            border-radius: 10px;
+            padding: 30px;
+            text-align: center;
+            box-shadow: 0 0 20px rgba(0, 0, 0, 0.6);
+            border: 1px solid rgba(0, 191, 255, 0.1);
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            min-height: 250px;
+        }
+
+        .roll-result-value {
+            font-family: 'Orbitron', sans-serif;
+            font-size: 4em;
+            font-weight: 700;
+            color: var(--accent-blue);
+            text-shadow: 0 0 25px var(--accent-blue), 0 0 50px var(--accent-blue);
+            margin-bottom: 15px;
+            min-height: 1em;
+        }
+
+        .roll-result-message {
+            font-size: 1.8em;
+            font-weight: 600;
+            margin-top: 10px;
+            min-height: 1.5em;
+        }
+        .roll-result-message.win-message {
+            color: var(--accent-green);
+            text-shadow: 0 0 15px var(--accent-green);
+        }
+        .roll-result-message.lose-message {
+            color: var(--history-lose);
+            text-shadow: 0 0 15px var(--history-lose);
+        }
+
+        .betting-controls-section {
+            background: var(--tertiary-bg);
+            border-radius: 10px;
+            padding: 20px;
+            box-shadow: 0 0 20px rgba(0, 0, 0, 0.6);
+            border: 1px solid rgba(0, 191, 255, 0.1);
+        }
+
+        .betting-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 15px;
+            margin-bottom: 20px;
+        }
+
+        .input-group label {
+            display: block;
+            margin-bottom: 8px;
+            color: var(--accent-green);
+            font-weight: 600;
+        }
+
+        .input-wrapper {
+            display: flex;
+            background: var(--input-bg);
+            border-radius: 8px;
+            overflow: hidden;
+            border: 1px solid rgba(0, 255, 127, 0.3);
+            box-shadow: inset 0 0 8px rgba(0, 255, 127, 0.1);
+        }
+
+        .input-wrapper span {
+            padding: 10px;
+            color: var(--accent-green);
+            background: rgba(0, 255, 127, 0.1);
+            font-weight: 700;
+            display: flex;
+            align-items: center;
+        }
+
+        .input-wrapper input {
+            flex-grow: 1;
+            background: none;
+            border: none;
+            color: var(--text-color);
+            padding: 10px 12px;
+            font-size: 1em;
+            outline: none;
+        }
+
+        .input-wrapper input:focus {
+            box-shadow: 0 0 10px rgba(0, 255, 127, 0.5);
+        }
+
+        .quick-bet-buttons {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+            margin-top: 10px;
+        }
+
+        .quick-bet-buttons .btn-small {
+            background: var(--secondary-bg);
+            border: 1px solid var(--accent-blue);
+            color: var(--accent-blue);
+            padding: 8px 15px;
+            border-radius: 5px;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            font-size: 0.9em;
+            font-weight: 600;
+        }
+
+        .quick-bet-buttons .btn-small:hover {
+            background: var(--accent-blue);
+            color: var(--primary-bg);
+            box-shadow: 0 0 10px var(--accent-blue);
+        }
+
+        .place-bet-btn {
+            width: 100%;
+            background: var(--button-primary);
+            border: none;
+            color: var(--primary-bg);
+            padding: 15px 30px;
+            font-size: 1.2em;
+            font-weight: 700;
+            border-radius: 8px;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            box-shadow: 0 5px 20px rgba(0, 0, 0, 0.4);
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            position: relative;
+            overflow: hidden;
+            margin-top: 20px;
+        }
+
+        .place-bet-btn::before {
+            content: '';
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            width: 300%;
+            height: 300%;
+            background: rgba(255, 255, 255, 0.15);
+            border-radius: 50%;
+            transition: all 0.75s ease-out;
+            transform: translate(-50%, -50%) scale(0);
+            opacity: 0;
+        }
+
+        .place-bet-btn:hover::before {
+            transform: translate(-50%, -50%) scale(1);
+            opacity: 1;
+        }
+
+        .place-bet-btn:hover {
+            background: var(--button-hover);
+            transform: translateY(-2px);
+            box-shadow: 0 8px 25px rgba(0, 0, 0, 0.5), 0 0 20px var(--border-glow);
+        }
+
+        .place-bet-btn:active {
+            transform: translateY(0);
+            box-shadow: 0 3px 10px rgba(0, 0, 0, 0.3);
+        }
+
+        .place-bet-btn:disabled {
+            opacity: 0.4;
+            cursor: not-allowed;
+            transform: none;
+            box-shadow: none;
+            background: #444;
+            color: #888;
+        }
+
+        .right-panel {
+            grid-column: 2 / 3; /* Right panel takes second column */
+            display: flex;
+            flex-direction: column;
+            background: var(--tertiary-bg);
+            border-radius: 10px;
+            padding: 15px;
+            box-shadow: 0 0 15px rgba(0, 0, 0, 0.5);
+            border: 1px solid rgba(0, 191, 255, 0.1);
+            height: calc(90vh - 40px); /* Adjust height to fill container */
+        }
+
+        .right-panel h3 {
+            color: var(--accent-green);
+            font-size: 1.1em;
+            margin-bottom: 10px;
+            text-shadow: 0 0 5px rgba(0, 255, 127, 0.3);
+            border-bottom: 1px solid rgba(0, 255, 127, 0.1);
+            padding-bottom: 8px;
+        }
+
+        .chat-area {
+            flex-grow: 1;
+            overflow-y: auto;
+            margin-bottom: 10px;
+            padding-right: 5px; /* For scrollbar */
+            scrollbar-width: thin; /* Firefox */
+            scrollbar-color: var(--accent-green) var(--secondary-bg); /* Firefox */
+        }
+        .chat-area::-webkit-scrollbar {
+            width: 8px;
+        }
+        .chat-area::-webkit-scrollbar-track {
+            background: var(--secondary-bg);
+            border-radius: 10px;
+        }
+        .chat-area::-webkit-scrollbar-thumb {
+            background-color: var(--accent-green);
+            border-radius: 10px;
+            border: 2px solid var(--secondary-bg);
+        }
+
+        .chat-message {
+            background: var(--secondary-bg);
+            padding: 8px 10px;
+            border-radius: 5px;
+            margin-bottom: 8px;
+            border: 1px solid rgba(0, 191, 255, 0.05);
+            font-size: 0.9em;
+        }
+        .chat-message .username {
+            color: var(--accent-blue);
+            font-weight: 600;
+            margin-right: 5px;
+        }
+        .chat-message .text {
+            color: var(--chat-text);
+        }
+        .chat-message .timestamp {
+            float: right;
+            color: #777;
+            font-size: 0.8em;
+        }
+
+        .chat-input-group {
+            display: flex;
+            gap: 10px;
+        }
+        .chat-input-group input {
+            flex-grow: 1;
+            background: var(--input-bg);
+            border: 1px solid var(--accent-blue);
+            border-radius: 8px;
+            color: var(--text-color);
+            padding: 10px;
+            outline: none;
+            font-size: 0.9em;
+        }
+        .chat-input-group button {
+            background: var(--accent-blue);
+            border: none;
+            border-radius: 8px;
+            color: white;
+            padding: 0 15px;
+            cursor: pointer;
+            transition: background 0.2s ease;
+        }
+        .chat-input-group button:hover {
+            background: var(--button-hover);
+        }
+
+        /* --- Login/Signup Modal --- */
+        .auth-modal-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.8);
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            z-index: 1000;
+        }
+
+        .auth-modal {
+            background: var(--secondary-bg);
+            padding: 30px;
+            border-radius: 15px;
+            box-shadow: 0 0 40px rgba(0, 0, 0, 0.8);
+            width: 400px;
+            text-align: center;
+            border: 1px solid var(--accent-green);
+        }
+
+        .auth-modal h2 {
+            color: var(--accent-green);
+            margin-bottom: 25px;
+            font-family: 'Orbitron', sans-serif;
+            font-size: 2em;
+            text-shadow: 0 0 10px var(--accent-green);
+        }
+
+        .auth-modal input {
+            width: calc(100% - 20px);
+            padding: 12px;
+            margin-bottom: 15px;
+            background: var(--input-bg);
+            border: 1px solid var(--accent-blue);
+            border-radius: 8px;
+            color: var(--text-color);
+            font-size: 1em;
+            outline: none;
+        }
+        .auth-modal input:focus {
+            box-shadow: 0 0 10px var(--accent-blue);
+        }
+
+        .auth-modal button {
+            width: 100%;
+            padding: 12px;
+            background: var(--button-primary);
+            border: none;
+            border-radius: 8px;
+            color: var(--primary-bg);
+            font-size: 1.1em;
+            font-weight: 700;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            margin-bottom: 10px;
+        }
+        .auth-modal button:hover {
+            background: var(--button-hover);
+            transform: translateY(-1px);
+            box-shadow: 0 0 15px var(--border-glow);
+        }
+
+        .auth-modal .toggle-link {
+            color: var(--accent-blue);
+            cursor: pointer;
+            font-size: 0.9em;
+            text-decoration: underline;
+            margin-top: 15px;
+            display: block;
+        }
+        .auth-modal .toggle-link:hover {
+            color: var(--accent-green);
+        }
+        .auth-modal .error-message {
+            color: var(--history-lose);
+            margin-top: 10px;
+            font-size: 0.9em;
+        }
+
+        .user-info {
+            position: absolute;
+            top: 25px;
+            right: 20px; /* Adjusted position */
+            background: rgba(0, 0, 0, 0.7);
+            padding: 8px 15px;
+            border-radius: 8px;
+            border: 1px solid var(--accent-green);
+            font-size: 1.0em;
+            font-weight: 600;
+            box-shadow: 0 0 10px var(--accent-green);
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            z-index: 10;
+        }
+        .user-info .username {
+            color: var(--accent-green);
+        }
+        .user-info .logout-btn {
+            background: #c0392b;
+            color: white;
+            border: none;
+            padding: 5px 10px;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 0.8em;
+        }
+
+        @keyframes rollAnimation {
+            0% { transform: translateY(-50px); opacity: 0.5; filter: blur(5px); }
+            20% { transform: translateY(0px); opacity: 1; filter: blur(0px); }
+            80% { transform: translateY(0px); opacity: 1; filter: blur(0px); }
+            100% { transform: translateY(50px); opacity: 0.5; filter: blur(5px); }
+        }
+
+        .roll-result-value.rolling {
+            animation: rollAnimation 1s ease-out forwards;
+        }
+
+        .winning-animation {
+            animation: winningGlow 1.5s ease-in-out infinite alternate;
+        }
+
+        @keyframes winningGlow {
+            0%, 100% {
+                box-shadow: 0 0 15px var(--accent-blue), 0 0 5px var(--accent-blue) inset;
+            }
+            50% {
+                box-shadow: 0 0 25px var(--accent-green), 0 0 10px var(--accent-green) inset;
+            }
+        }
+
+    </style>
+</head>
+<body>
+    <!-- Login/Signup Modal -->
+    <div id="auth-modal-overlay" class="auth-modal-overlay">
+        <div class="auth-modal">
+            <h2 id="auth-modal-title">LOGIN</h2>
+            <input type="text" id="auth-username" placeholder="Username">
+            <input type="password" id="auth-password" placeholder="Password">
+            <button id="auth-submit-btn">LOGIN</button>
+            <p id="auth-error-message" class="error-message"></p>
+            <a href="#" class="toggle-link" id="auth-toggle-link">Don't have an account? Sign Up</a>
+        </div>
+    </div>
+
+    <!-- Main Game Content -->
+    <div class="container" id="game-container" style="display: none;">
+        <h1 class="header">Wiet de Casino</h1>
+
+        <div class="currency-display" id="currency">LSC: <span id="lsc-amount">0.00</span></div>
+        <div class="user-info" id="user-info" style="display: none;">
+            <span class="username" id="display-username"></span>
+            <button class="logout-btn" onclick="logout()">Logout</button>
+        </div>
+
+
+        <div class="main-game-area">
+            <div class="previous-rolls">
+                <h3>PREVIOUS ROLLS</h3>
+                <div class="roll-history" id="roll-history">
+                    <!-- Roll items will be dynamically added here -->
+                </div>
+            </div>
+
+            <div class="roll-display">
+                <div class="roll-result-value" id="roll-result-value">--.--</div>
+                <div class="roll-result-message" id="roll-result-message">ENTER BET AND MULTIPLIER TO START</div>
+            </div>
+
+            <div class="betting-controls-section">
+                <div class="betting-grid">
+                    <div class="input-group">
+                        <label for="bet-amount-input">BET AMOUNT</label>
+                        <div class="input-wrapper">
+                            <span>LSC</span>
+                            <input type="number" id="bet-amount-input" value="0.00" step="0.01">
+                        </div>
+                        <div class="quick-bet-buttons">
+                            <button class="btn-small" onclick="adjustBet('clear')">Clear</button>
+                            <button class="btn-small" onclick="adjustBet(10)">+10</button>
+                            <button class="btn-small" onclick="adjustBet(100)">+100</button>
+                            <button class="btn-small" onclick="adjustBet(1000)">+1k</button>
+                            <button class="btn-small" onclick="adjustBet(5000)">+5k</button>
+                            <button class="btn-small" onclick="adjustBet('half')">1/2</button>
+                            <button class="btn-small" onclick="adjustBet('double')">2x</button>
+                            <button class="btn-small" onclick="adjustBet('max')">Max</button>
+                        </div>
+                    </div>
+
+                    <div class="input-group">
+                        <label for="multiplier-input">TARGET MULTIPLIER</label>
+                        <div class="input-wrapper">
+                            <span>X</span>
+                            <input type="number" id="multiplier-input" value="2.00" step="0.01">
+                        </div>
+                        <div class="quick-bet-buttons">
+                            <button class="btn-small" onclick="adjustMultiplier(1.1)">1.1x</button>
+                            <button class="btn-small" onclick="adjustMultiplier(2.0)">2.0x</button>
+                            <button class="btn-small" onclick="adjustMultiplier(5.0)">5.0x</button>
+                            <button class="btn-small" onclick="adjustMultiplier(10.0)">10.0x</button>
+                            <button class="btn-small" onclick="adjustMultiplier(50.0)">50.0x</button>
+                        </div>
+                    </div>
+                </div>
+
+                <button class="place-bet-btn" id="place-bet-btn" onclick="placeBet()">PLACE BET</button>
+            </div>
+        </div>
+
+        <div class="right-panel">
+            <h3>LIVE CHAT</h3>
+            <div class="chat-area" id="chat-area">
+                <!-- Chat messages will be dynamically added here -->
+            </div>
+            <div class="chat-input-group">
+                <input type="text" id="chat-input" placeholder="Say something...">
+                <button onclick="sendMessage()">Send</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Game State
+        let lsc = 0.00; // Will be loaded from server
+        let username = ''; // Will be loaded from server
+        let currentBet = 0.00;
+        let targetMultiplier = 2.00;
+
+        const baseUrl = 'http://127.0.0.1:5000'; // Make sure this matches your Flask server address
+        const socket = io(baseUrl);
+
+        // DOM Elements
+        const authModalOverlay = document.getElementById('auth-modal-overlay');
+        const authModalTitle = document.getElementById('auth-modal-title');
+        const authUsernameInput = document.getElementById('auth-username');
+        const authPasswordInput = document.getElementById('auth-password');
+        const authSubmitBtn = document.getElementById('auth-submit-btn');
+        const authErrorMessage = document.getElementById('auth-error-message');
+        const authToggleLink = document.getElementById('auth-toggle-link');
+        const gameContainer = document.getElementById('game-container');
+
+        const lscAmountSpan = document.getElementById('lsc-amount');
+        const displayUsernameSpan = document.getElementById('display-username');
+        const userInfoDiv = document.getElementById('user-info');
+        const betAmountInput = document.getElementById('bet-amount-input');
+        const multiplierInput = document.getElementById('multiplier-input');
+        const placeBetButton = document.getElementById('place-bet-btn');
+        const rollResultValueDiv = document.getElementById('roll-result-value');
+        const rollResultMessageDiv = document.getElementById('roll-result-message');
+        const rollHistoryDiv = document.getElementById('roll-history');
+        const chatArea = document.getElementById('chat-area');
+        const chatInput = document.getElementById('chat-input');
+
+        let isLoginMode = true; // State for login/signup modal
+
+        // --- Authentication Logic ---
+        function toggleAuthMode() {
+            isLoginMode = !isLoginMode;
+            authModalTitle.textContent = isLoginMode ? 'LOGIN' : 'SIGN UP';
+            authSubmitBtn.textContent = isLoginMode ? 'LOGIN' : 'SIGN UP';
+            authToggleLink.textContent = isLoginMode ? "Don't have an account? Sign Up" : "Already have an account? Login";
+            authErrorMessage.textContent = ''; // Clear error on toggle
+        }
+
+        authToggleLink.addEventListener('click', (e) => {
+            e.preventDefault();
+            toggleAuthMode();
+        });
+
+        authSubmitBtn.addEventListener('click', async () => {
+            const path = isLoginMode ? '/login' : '/register';
+            const usernameVal = authUsernameInput.value;
+            const passwordVal = authPasswordInput.value;
+
+            if (!usernameVal || !passwordVal) {
+                authErrorMessage.textContent = 'Please enter both username and password.';
+                return;
+            }
+
+            try {
+                const response = await fetch(`${baseUrl}${path}`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ username: usernameVal, password: passwordVal })
+                });
+                const data = await response.json();
+
+                if (data.success) {
+                    if (isLoginMode) {
+                        authModalOverlay.style.display = 'none';
+                        username = data.user.username;
+                        lsc = data.user.lsc_balance;
+                        initGameUI(username, lsc);
+                        socket.connect(); // Connect Socket.IO after successful login
+                    } else {
+                        // After signup, switch to login mode and prompt user to login
+                        authErrorMessage.textContent = data.message;
+                        toggleAuthMode();
+                    }
+                } else {
+                    authErrorMessage.textContent = data.message;
+                }
+            } catch (error) {
+                console.error('Auth error:', error);
+                authErrorMessage.textContent = 'An error occurred. Please try again.';
+            }
+        });
+
+        async function fetchUserData() {
+            try {
+                const response = await fetch(`${baseUrl}/user_data`);
+                const data = await response.json();
+                if (data.success) {
+                    username = data.user.username;
+                    lsc = data.user.lsc_balance;
+                    initGameUI(username, lsc);
+                    socket.connect(); // Connect Socket.IO after checking session
+                } else {
+                    // Not logged in, show auth modal
+                    authModalOverlay.style.display = 'flex';
+                    gameContainer.style.display = 'none';
+                }
+            } catch (error) {
+                console.error('Failed to fetch user data:', error);
+                // Assume not logged in, show auth modal
+                authModalOverlay.style.display = 'flex';
+                gameContainer.style.display = 'none';
+            }
+        }
+
+        async function logout() {
+            try {
+                await fetch(`${baseUrl}/logout`, { method: 'POST' });
+                location.reload(); // Reload page to show login screen
+            } catch (error) {
+                console.error('Logout failed:', error);
+            }
+        }
+
+
+        // --- Game UI Initialization ---
+        function initGameUI(user, balance) {
+            gameContainer.style.display = 'grid'; // Show the game content
+            userInfoDiv.style.display = 'flex'; // Show user info
+            displayUsernameSpan.textContent = user;
+            lscAmountSpan.textContent = balance.toFixed(2);
+            betAmountInput.value = currentBet.toFixed(2);
+            multiplierInput.value = targetMultiplier.toFixed(2);
+            updatePlaceBetButtonState();
+        }
+
+        // --- Socket.IO Event Handlers ---
+        socket.on('connect', () => {
+            console.log('Connected to Socket.IO server');
+        });
+
+        socket.on('disconnect', () => {
+            console.log('Disconnected from Socket.IO server');
+        });
+
+        socket.on('chat_history', (messages) => {
+            messages.forEach(addMessageToChat);
+            chatArea.scrollTop = chatArea.scrollHeight; // Scroll to bottom
+        });
+
+        socket.on('new_message', (message) => {
+            addMessageToChat(message);
+            chatArea.scrollTop = chatArea.scrollHeight; // Scroll to bottom
+        });
+
+        socket.on('lsc_rain_notification', (data) => {
+            alert(`LSC RAIN! You received ${data.amount} LSC! Your new balance is ${data.new_balance.toFixed(2)}.`);
+            lsc = data.new_balance;
+            updateLSC();
+        });
+        
+        socket.on('balance_update', (data) => {
+            lsc = data.new_balance;
+            updateLSC();
+        });
+
+        socket.on('error', (data) => {
+            console.error('Socket error:', data.message);
+            rollResultMessageDiv.textContent = data.message;
+            rollResultMessageDiv.className = 'roll-result-message lose-message';
+        });
+
+        // --- Chat Functions ---
+        function addMessageToChat(message) {
+            const messageDiv = document.createElement('div');
+            messageDiv.className = 'chat-message';
+            messageDiv.innerHTML = `<span class="username">${message.username}:</span> <span class="text">${message.text}</span> <span class="timestamp">${message.timestamp}</span>`;
+            chatArea.appendChild(messageDiv);
+        }
+
+        function sendMessage() {
+            const messageText = chatInput.value.trim();
+            if (messageText) {
+                socket.emit('message', { text: messageText });
+                chatInput.value = '';
+            }
+        }
+
+        chatInput.addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') {
+                sendMessage();
+            }
+        });
+
+
+        // --- Game Logic Functions ---
+        function updateLSC() {
+            lscAmountSpan.textContent = lsc.toFixed(2);
+        }
+
+        function adjustBet(action) {
+            let bet = parseFloat(betAmountInput.value);
+            if (isNaN(bet)) bet = 0;
+
+            switch (action) {
+                case 'clear':
+                    bet = 0;
+                    break;
+                case 'half':
+                    bet = Math.max(0, bet / 2);
+                    break;
+                case 'double':
+                    bet = bet * 2;
+                    break;
+                case 'max':
+                    bet = lsc;
+                    break;
+                default: // Numerical amount
+                    bet += action;
+                    break;
+            }
+            betAmountInput.value = Math.min(lsc, Math.max(0, bet)).toFixed(2);
+            currentBet = parseFloat(betAmountInput.value);
+            updatePlaceBetButtonState();
+        }
+
+        function adjustMultiplier(value) {
+            multiplierInput.value = value.toFixed(2);
+            targetMultiplier = parseFloat(multiplierInput.value);
+            updatePlaceBetButtonState();
+        }
+
+        function updatePlaceBetButtonState() {
+            const bet = parseFloat(betAmountInput.value);
+            const multiplier = parseFloat(multiplierInput.value);
+            placeBetButton.disabled = (bet <= 0 || multiplier < 1.01 || bet > lsc);
+        }
+
+        async function placeBet() {
+            const bet = parseFloat(betAmountInput.value);
+            const multiplier = parseFloat(multiplierInput.value);
+
+            if (bet <= 0 || multiplier < 1.01 || bet > lsc) {
+                rollResultMessageDiv.textContent = "INVALID BET OR MULTIPLIER!";
+                rollResultMessageDiv.className = 'roll-result-message lose-message';
+                return;
+            }
+
+            placeBetButton.disabled = true;
+
+            rollResultValueDiv.textContent = "--.--";
+            rollResultMessageDiv.textContent = "ROLLING...";
+            rollResultMessageDiv.className = 'roll-result-message';
+            rollResultValueDiv.classList.add('rolling');
+
+            try {
+                const response = await fetch(`${baseUrl}/place_bet`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ bet_amount: bet, target_multiplier: multiplier })
+                });
+                const data = await response.json();
+
+                if (data.success) {
+                    const outcome = data.outcome;
+                    
+                    await new Promise(resolve => setTimeout(resolve, 1500)); // Simulate rolling time
+
+                    rollResultValueDiv.classList.remove('rolling');
+                    rollResultValueDiv.textContent = outcome.roll_result.toFixed(2);
+                    lsc = outcome.new_balance; // Update LSC from server response
+                    updateLSC();
+
+                    let resultClass = 'lose';
+                    if (outcome.win) {
+                        rollResultMessageDiv.textContent = `YOU WIN! +${outcome.winnings.toFixed(2)} LSC`;
+                        rollResultMessageDiv.className = 'roll-result-message win-message winning-animation';
+                        lscAmountSpan.classList.add('winning-animation');
+                        resultClass = 'win';
+                        setTimeout(() => {
+                            lscAmountSpan.classList.remove('winning-animation');
+                            rollResultMessageDiv.classList.remove('winning-animation');
+                        }, 3000);
+                    } else {
+                        rollResultMessageDiv.textContent = `YOU LOSE! -${outcome.bet_amount.toFixed(2)} LSC`;
+                        rollResultMessageDiv.className = 'roll-result-message lose-message';
+                    }
+                    addRollToHistory(outcome.target_multiplier, resultClass);
+
+                } else {
+                    rollResultMessageDiv.textContent = data.message;
+                    rollResultMessageDiv.className = 'roll-result-message lose-message';
+                }
+            } catch (error) {
+                console.error('Betting error:', error);
+                rollResultMessageDiv.textContent = 'An error occurred during the bet.';
+                rollResultMessageDiv.className = 'roll-result-message lose-message';
+            } finally {
+                updatePlaceBetButtonState();
+            }
+        }
+
+        function addRollToHistory(multiplier, resultClass) {
+            const rollItem = document.createElement('div');
+            rollItem.className = `roll-item ${resultClass}`;
+            rollItem.textContent = `${multiplier.toFixed(2)}x`;
+            rollHistoryDiv.prepend(rollItem);
+
+            while (rollHistoryDiv.children.length > 20) {
+                rollHistoryDiv.removeChild(rollHistoryDiv.lastChild);
+            }
+        }
+
+        // Initial check for authentication
+        window.onload = fetchUserData;
+
+    </script>
+</body>
+</html>
