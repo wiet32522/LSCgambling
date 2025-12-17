@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Wiet de Casino - Roll</title>
     <link href="https://fonts.googleapis.com/css2?family=Rajdhani:wght@400;600;700&family=Orbitron:wght@400;700&display=swap" rel="stylesheet">
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.0.0/socket.io.js"></script>
+    <script src="https://js.pusher.com/7.0/pusher.min.js"></script>
     <style>
         :root {
             --primary-bg: #1a1e28;
@@ -667,14 +667,19 @@
     </div>
 
     <script>
-        // Game State
-        let lsc = 0.00; // Will be loaded from server
-        let username = ''; // Will be loaded from server
+        // Frontend Game State
+        let userId = null;
+        let username = '';
+        let lsc = 0.00;
         let currentBet = 0.00;
         let targetMultiplier = 2.00;
 
-        const baseUrl = 'http://127.0.0.1:5000'; // Make sure this matches your Flask server address
-        const socket = io(baseUrl);
+        // Pusher Configuration (replace with your Pusher App Key and Cluster)
+        const PUSHER_APP_KEY = '14981a5da0925cfcf050'; // <<< REPLACE THIS
+        const PUSHER_CLUSTER = 'mt1'; // <<< REPLACE THIS
+
+        // API base for Netlify Functions (this will be your site's domain + /api)
+        const API_BASE = '/.netlify/functions'; // Relative path to functions
 
         // DOM Elements
         const authModalOverlay = document.getElementById('auth-modal-overlay');
@@ -699,6 +704,42 @@
         const chatInput = document.getElementById('chat-input');
 
         let isLoginMode = true; // State for login/signup modal
+        let pusherClient = null; // Pusher client instance
+
+        // --- Utility Functions ---
+        async function callNetlifyFunction(path, method = 'POST', body = null) {
+            const options = {
+                method: method,
+                headers: { 'Content-Type': 'application/json' },
+            };
+            if (body) {
+                options.body = JSON.stringify(body);
+            }
+            const response = await fetch(`${API_BASE}${path}`, options);
+            if (!response.ok) {
+                const errorData = await response.json();
+                throw new Error(errorData.message || `API error: ${response.status}`);
+            }
+            return response.json();
+        }
+
+        function setSession(data) {
+            localStorage.setItem('user_id', data.id);
+            localStorage.setItem('username', data.username);
+        }
+
+        function clearSession() {
+            localStorage.removeItem('user_id');
+            localStorage.removeItem('username');
+        }
+
+        function getUserId() {
+            return localStorage.getItem('user_id');
+        }
+
+        function getUsername() {
+            return localStorage.getItem('username');
+        }
 
         // --- Authentication Logic ---
         function toggleAuthMode() {
@@ -715,7 +756,6 @@
         });
 
         authSubmitBtn.addEventListener('click', async () => {
-            const path = isLoginMode ? '/login' : '/register';
             const usernameVal = authUsernameInput.value;
             const passwordVal = authPasswordInput.value;
 
@@ -725,20 +765,21 @@
             }
 
             try {
-                const response = await fetch(`${baseUrl}${path}`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ username: usernameVal, password: passwordVal })
+                const data = await callNetlifyFunction('/auth', 'POST', {
+                    username: usernameVal,
+                    password: passwordVal,
+                    type: isLoginMode ? 'login' : 'register'
                 });
-                const data = await response.json();
 
                 if (data.success) {
                     if (isLoginMode) {
-                        authModalOverlay.style.display = 'none';
+                        setSession(data.user);
+                        userId = data.user.id;
                         username = data.user.username;
-                        lsc = data.user.lsc_balance;
-                        initGameUI(username, lsc);
-                        socket.connect(); // Connect Socket.IO after successful login
+                        lsc = parseFloat(data.user.lsc_balance);
+                        authModalOverlay.style.display = 'none';
+                        initGameUI();
+                        setupPusher(); // Setup Pusher after successful login
                     } else {
                         // After signup, switch to login mode and prompt user to login
                         authErrorMessage.textContent = data.message;
@@ -749,90 +790,133 @@
                 }
             } catch (error) {
                 console.error('Auth error:', error);
-                authErrorMessage.textContent = 'An error occurred. Please try again.';
+                authErrorMessage.textContent = error.message || 'An error occurred. Please try again.';
             }
         });
 
-        async function fetchUserData() {
-            try {
-                const response = await fetch(`${baseUrl}/user_data`);
-                const data = await response.json();
-                if (data.success) {
-                    username = data.user.username;
-                    lsc = data.user.lsc_balance;
-                    initGameUI(username, lsc);
-                    socket.connect(); // Connect Socket.IO after checking session
-                } else {
-                    // Not logged in, show auth modal
+        async function fetchUserDataAndInitialize() {
+            userId = getUserId();
+            username = getUsername();
+
+            if (userId && username) {
+                try {
+                    const data = await callNetlifyFunction('/get-user-data', 'POST', { userId });
+                    if (data.success) {
+                        lsc = parseFloat(data.user.lsc_balance);
+                        authModalOverlay.style.display = 'none';
+                        initGameUI();
+                        setupPusher(); // Setup Pusher after fetching data (if session exists)
+                    } else {
+                        clearSession(); // Invalid session
+                        authModalOverlay.style.display = 'flex';
+                        gameContainer.style.display = 'none';
+                    }
+                } catch (error) {
+                    console.error('Failed to fetch user data:', error);
+                    clearSession(); // Assume session invalid
                     authModalOverlay.style.display = 'flex';
                     gameContainer.style.display = 'none';
                 }
-            } catch (error) {
-                console.error('Failed to fetch user data:', error);
-                // Assume not logged in, show auth modal
+            } else {
                 authModalOverlay.style.display = 'flex';
                 gameContainer.style.display = 'none';
             }
         }
 
-        async function logout() {
-            try {
-                await fetch(`${baseUrl}/logout`, { method: 'POST' });
-                location.reload(); // Reload page to show login screen
-            } catch (error) {
-                console.error('Logout failed:', error);
+        function logout() {
+            clearSession();
+            if (pusherClient) {
+                pusherClient.disconnect();
             }
+            location.reload(); // Reload page to show login screen
         }
 
-
         // --- Game UI Initialization ---
-        function initGameUI(user, balance) {
+        function initGameUI() {
             gameContainer.style.display = 'grid'; // Show the game content
             userInfoDiv.style.display = 'flex'; // Show user info
-            displayUsernameSpan.textContent = user;
-            lscAmountSpan.textContent = balance.toFixed(2);
+            displayUsernameSpan.textContent = username;
+            lscAmountSpan.textContent = lsc.toFixed(2);
             betAmountInput.value = currentBet.toFixed(2);
             multiplierInput.value = targetMultiplier.toFixed(2);
             updatePlaceBetButtonState();
+            fetchChatHistory(); // Load chat history on game UI init
         }
 
-        // --- Socket.IO Event Handlers ---
-        socket.on('connect', () => {
-            console.log('Connected to Socket.IO server');
-        });
+        // --- Pusher Real-time Setup ---
+        function setupPusher() {
+            if (!PUSHER_APP_KEY || !PUSHER_CLUSTER || PUSHER_APP_KEY === 'YOUR_PUSHER_APP_KEY') {
+                console.error("Pusher App Key or Cluster not defined or not replaced. Real-time features will not work.");
+                return;
+            }
 
-        socket.on('disconnect', () => {
-            console.log('Disconnected from Socket.IO server');
-        });
+            pusherClient = new Pusher(PUSHER_APP_KEY, {
+                cluster: PUSHER_CLUSTER,
+                forceTLS: true,
+                // You might need a custom auth endpoint if using private channels
+                // For this project, 'chat-channel' is public. 'user-{id}' channels are private
+                // and would need an auth function that validates the user before returning
+                // an auth token. However, Pusher's client library is designed to handle
+                // authentication for private channels. If you were implementing server-side
+                // authentication for private channels, it would look like this:
+                // authEndpoint: `${API_BASE}/chat-auth`,
+                // auth: {
+                //     headers: {
+                //         'X-Auth-Token': 'your_user_auth_token_here' // e.g. JWT
+                //     }
+                // }
+            });
 
-        socket.on('chat_history', (messages) => {
-            messages.forEach(addMessageToChat);
-            chatArea.scrollTop = chatArea.scrollHeight; // Scroll to bottom
-        });
+            // Subscribe to public chat channel
+            const chatChannel = pusherClient.subscribe('chat-channel');
+            chatChannel.bind('new-message', (data) => {
+                addMessageToChat(data);
+                chatArea.scrollTop = chatArea.scrollHeight; // Scroll to bottom
+            });
 
-        socket.on('new_message', (message) => {
-            addMessageToChat(message);
-            chatArea.scrollTop = chatArea.scrollHeight; // Scroll to bottom
-        });
+            // Subscribe to user-specific private channel for balance updates/rain
+            // This channel is named 'private-user-{userId}' and requires authentication.
+            // Pusher will automatically hit the authEndpoint (if configured) or your
+            // server-side auth logic to authorize access to this private channel.
+            // For simplicity in this example, we'll use a public-like approach where
+            // the server just triggers to a user-specific channel.
+            // A more secure implementation would use a private channel and a proper authEndpoint.
 
-        socket.on('lsc_rain_notification', (data) => {
-            alert(`LSC RAIN! You received ${data.amount} LSC! Your new balance is ${data.new_balance.toFixed(2)}.`);
-            lsc = data.new_balance;
-            updateLSC();
-        });
-        
-        socket.on('balance_update', (data) => {
-            lsc = data.new_balance;
-            updateLSC();
-        });
+            const userChannel = pusherClient.subscribe(`user-${userId}`); // This will be a public channel named 'user-{userId}'
+                                                                      // For true private channels, prepend 'private-' and implement server auth for it.
+            userChannel.bind('balance-update', (data) => {
+                lsc = parseFloat(data.new_balance);
+                updateLSC();
+                if (data.message) {
+                    alert(data.message); // For LSC Rain notifications
+                }
+            });
 
-        socket.on('error', (data) => {
-            console.error('Socket error:', data.message);
-            rollResultMessageDiv.textContent = data.message;
-            rollResultMessageDiv.className = 'roll-result-message lose-message';
-        });
+            pusherClient.connection.bind('connected', () => {
+                console.log('Pusher connected!');
+            });
+            pusherClient.connection.bind('disconnected', () => {
+                console.log('Pusher disconnected!');
+            });
+            pusherClient.connection.bind('error', (err) => {
+                console.error('Pusher error:', err);
+            });
+        }
+
 
         // --- Chat Functions ---
+        async function fetchChatHistory() {
+            try {
+                const data = await callNetlifyFunction('/get-chat-history', 'GET');
+                if (data.success) {
+                    data.messages.forEach(msg => addMessageToChat(msg));
+                    chatArea.scrollTop = chatArea.scrollHeight;
+                }
+            } catch (error) {
+                console.error('Error fetching chat history:', error);
+            }
+        }
+
         function addMessageToChat(message) {
             const messageDiv = document.createElement('div');
             messageDiv.className = 'chat-message';
@@ -840,11 +924,24 @@
             chatArea.appendChild(messageDiv);
         }
 
-        function sendMessage() {
+        async function sendMessage() {
+            if (!userId) {
+                alert('You must be logged in to chat.');
+                return;
+            }
             const messageText = chatInput.value.trim();
             if (messageText) {
-                socket.emit('message', { text: messageText });
-                chatInput.value = '';
+                try {
+                    await callNetlifyFunction('/chat', 'POST', {
+                        userId: userId,
+                        username: username,
+                        text: messageText
+                    });
+                    chatInput.value = '';
+                } catch (error) {
+                    console.error('Error sending message:', error);
+                    alert('Failed to send message.');
+                }
             }
         }
 
@@ -895,10 +992,15 @@
         function updatePlaceBetButtonState() {
             const bet = parseFloat(betAmountInput.value);
             const multiplier = parseFloat(multiplierInput.value);
-            placeBetButton.disabled = (bet <= 0 || multiplier < 1.01 || bet > lsc);
+            placeBetButton.disabled = (bet <= 0 || multiplier < 1.01 || bet > lsc || !userId); // Disable if not logged in
         }
 
         async function placeBet() {
+            if (!userId) {
+                alert('You must be logged in to place a bet.');
+                return;
+            }
+
             const bet = parseFloat(betAmountInput.value);
             const multiplier = parseFloat(multiplierInput.value);
 
@@ -916,46 +1018,41 @@
             rollResultValueDiv.classList.add('rolling');
 
             try {
-                const response = await fetch(`${baseUrl}/place_bet`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ bet_amount: bet, target_multiplier: multiplier })
+                const data = await callNetlifyFunction('/bet', 'POST', {
+                    userId: userId,
+                    betAmount: bet,
+                    targetMultiplier: multiplier
                 });
-                const data = await response.json();
 
-                if (data.success) {
-                    const outcome = data.outcome;
-                    
-                    await new Promise(resolve => setTimeout(resolve, 1500)); // Simulate rolling time
+                // Simulate rolling time (client-side only for visual effect)
+                await new Promise(resolve => setTimeout(resolve, 1500));
 
-                    rollResultValueDiv.classList.remove('rolling');
-                    rollResultValueDiv.textContent = outcome.roll_result.toFixed(2);
-                    lsc = outcome.new_balance; // Update LSC from server response
-                    updateLSC();
+                const outcome = data.outcome;
 
-                    let resultClass = 'lose';
-                    if (outcome.win) {
-                        rollResultMessageDiv.textContent = `YOU WIN! +${outcome.winnings.toFixed(2)} LSC`;
-                        rollResultMessageDiv.className = 'roll-result-message win-message winning-animation';
-                        lscAmountSpan.classList.add('winning-animation');
-                        resultClass = 'win';
-                        setTimeout(() => {
-                            lscAmountSpan.classList.remove('winning-animation');
-                            rollResultMessageDiv.classList.remove('winning-animation');
-                        }, 3000);
-                    } else {
-                        rollResultMessageDiv.textContent = `YOU LOSE! -${outcome.bet_amount.toFixed(2)} LSC`;
-                        rollResultMessageDiv.className = 'roll-result-message lose-message';
-                    }
-                    addRollToHistory(outcome.target_multiplier, resultClass);
+                rollResultValueDiv.classList.remove('rolling');
+                rollResultValueDiv.textContent = parseFloat(outcome.roll_result).toFixed(2);
+                lsc = parseFloat(outcome.new_balance); // Update LSC from server response
+                updateLSC();
 
+                let resultClass = 'lose';
+                if (outcome.win) {
+                    rollResultMessageDiv.textContent = `YOU WIN! +${parseFloat(outcome.winnings).toFixed(2)} LSC`;
+                    rollResultMessageDiv.className = 'roll-result-message win-message winning-animation';
+                    lscAmountSpan.classList.add('winning-animation');
+                    resultClass = 'win';
+                    setTimeout(() => {
+                        lscAmountSpan.classList.remove('winning-animation');
+                        rollResultMessageDiv.classList.remove('winning-animation');
+                    }, 3000);
                 } else {
-                    rollResultMessageDiv.textContent = data.message;
+                    rollResultMessageDiv.textContent = `YOU LOSE! -${parseFloat(outcome.bet_amount).toFixed(2)} LSC`;
                     rollResultMessageDiv.className = 'roll-result-message lose-message';
                 }
+                addRollToHistory(outcome.target_multiplier, resultClass);
+
             } catch (error) {
                 console.error('Betting error:', error);
-                rollResultMessageDiv.textContent = 'An error occurred during the bet.';
+                rollResultMessageDiv.textContent = error.message || 'An error occurred during the bet.';
                 rollResultMessageDiv.className = 'roll-result-message lose-message';
             } finally {
                 updatePlaceBetButtonState();
@@ -974,7 +1071,7 @@
         }
 
         // Initial check for authentication
-        window.onload = fetchUserData;
+        window.onload = fetchUserDataAndInitialize;
 
     </script>
 </body>
